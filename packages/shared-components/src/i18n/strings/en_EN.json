@@ -150,7 +150,8 @@
             "low_priority": "Low priority",
             "mark_read": "Mark as read",
             "mark_unread": "Mark as unread",
-            "move_to_section": "Move to"
+            "move_to_section": "Move to",
+            "remove_from_section": "Remove from section"
         },
         "notification_options": "Notification options",
         "open_space_menu": "Open space menu",
@@ -251,6 +252,7 @@
             "label": "Message Actions",
             "view_in_room": "View in room"
         },
+        "message_shared_by": "%(displayName)s (%(userId)s) shared this message since you were not in the room when it was sent.",
         "message_timestamp_received_at": "Received at: %(dateTime)s",
         "message_timestamp_sent_at": "Sent at: %(dateTime)s",
         "mjolnir": {

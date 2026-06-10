@@ -207,6 +207,7 @@ export class RoomListHeaderViewModel
 
     public createSection = (): void => {
         RoomListStoreV3.instance.createSection();
+        PosthogTrackers.trackSectionCreation("RoomListHeader");
     };
 
     public collapseOrExpandSections = (): void => {
@@ -215,6 +216,9 @@ export class RoomListHeaderViewModel
                 ? Action.RoomListExpandAllSections
                 : Action.RoomListCollapseAllSections;
         defaultDispatcher.fire(action);
+
+        const kind = action === Action.RoomListExpandAllSections ? "Expand" : "Collapse";
+        PosthogTrackers.trackCollapseOrExpandSection(kind, "RoomListHeader");
     };
 
     private readonly onDispatch = (payload: { action: string }): void => {
@@ -285,19 +289,20 @@ function computeHeaderSpaceState(
     spaceStore: SpaceStoreClass,
     matrixClient: MatrixClient,
 ): Omit<RoomListHeaderViewSnapshot, "activeSortOption" | "isMessagePreviewEnabled"> {
+    const isSectionFeatureEnabled = SettingsStore.getValue("feature_room_list_sections");
+
     const activeSpace = spaceStore.activeSpaceRoom;
     const title = getHeaderTitle(spaceStore);
 
     const canCreateRoom = hasCreateRoomRights(matrixClient, activeSpace);
     const canCreateVideoRoom = getCanCreateVideoRoom(canCreateRoom);
-    const displayComposeMenu = canCreateRoom;
+    const displayComposeMenu = isSectionFeatureEnabled || canCreateRoom;
     const displaySpaceMenu = Boolean(activeSpace);
     const canInviteInSpace = Boolean(
         activeSpace?.getJoinRule() === JoinRule.Public || activeSpace?.canInvite(matrixClient.getSafeUserId()),
     );
     const canAccessSpaceSettings = Boolean(activeSpace && shouldShowSpaceSettings(activeSpace));
 
-    const isSectionFeatureEnabled = SettingsStore.getValue("feature_room_list_sections");
     const useComposeIcon = !isSectionFeatureEnabled;
     const canCreateSection = isSectionFeatureEnabled;
 

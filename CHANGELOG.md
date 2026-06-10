@@ -1,3 +1,57 @@
+Changes in [1.12.21](https://github.com/element-hq/element-web/releases/tag/v1.12.21) (2026-06-09)
+==================================================================================================
+## ✨ Features
+
+* Bump module API to 1.14.0 ([#33685](https://github.com/element-hq/element-web/pull/33685)). Contributed by @Half-Shot.
+* Apply new design and display logic to logout confirmation dialog ([#33426](https://github.com/element-hq/element-web/pull/33426)). Contributed by @uhoreg.
+* Room list: improve custom sections in Spaces  ([#33523](https://github.com/element-hq/element-web/pull/33523)). Contributed by @florianduros.
+* Periodically nag the user if their device remains unverified ([#33346](https://github.com/element-hq/element-web/pull/33346)). Contributed by @uhoreg.
+* Use the separator as border between roomlist and main panel ([#33598](https://github.com/element-hq/element-web/pull/33598)). Contributed by @MidhunSureshR.
+* Add support for `m.recent_emoji` account data event ([#33172](https://github.com/element-hq/element-web/pull/33172)). Contributed by @t3chguy.
+* Room list: reduce font size of sections ([#33580](https://github.com/element-hq/element-web/pull/33580)). Contributed by @florianduros.
+
+## 🐛 Bug Fixes
+
+* Remove resizer from fullscreen modules(like multiroom) ([#33684](https://github.com/element-hq/element-web/pull/33684)). Contributed by @langleyd.
+* fix: use configured brand name in JSON and PlainText chat export filenames ([#33680](https://github.com/element-hq/element-web/pull/33680)). Contributed by @RoySerbi.
+* Fix pinned message banner disappearing when a pinned message event is unkown ([#33534](https://github.com/element-hq/element-web/pull/33534)). Contributed by @florianduros.
+
+
+Changes in [1.12.20](https://github.com/element-hq/element-web/releases/tag/v1.12.20) (2026-05-27)
+==================================================================================================
+## 🐛 Bug Fixes
+
+* [Backport staging] Realign the User Menu profile picture on desktop ([#33634](https://github.com/element-hq/element-web/pull/33634)). Contributed by @RiotRobot.
+
+
+Changes in [1.12.19](https://github.com/element-hq/element-web/releases/tag/v1.12.19) (2026-05-27)
+==================================================================================================
+## 🦖 Deprecations
+
+* Remove MSC3215 (Report to Moderators) labs feature ([#33492](https://github.com/element-hq/element-web/pull/33492)). Contributed by @turt2live.
+
+## ✨ Features
+
+* Tweak new user menu design ([#33444](https://github.com/element-hq/element-web/pull/33444)). Contributed by @dbkr.
+* Call Tile - Improve tile alignment in modern and bubble layout ([#33478](https://github.com/element-hq/element-web/pull/33478)). Contributed by @MidhunSureshR.
+* Module API for adding new file upload mechanisms ([#33355](https://github.com/element-hq/element-web/pull/33355)). Contributed by @Half-Shot.
+* Incoming Element Calls now trigger a regular OS notification ([#33499](https://github.com/element-hq/element-web/pull/33499)). Contributed by @MatrimAl.
+* Call Tile - Support declined call tile ([#33371](https://github.com/element-hq/element-web/pull/33371)). Contributed by @MidhunSureshR.
+* Room list: drag and drop rooms into sections ([#33366](https://github.com/element-hq/element-web/pull/33366)). Contributed by @florianduros.
+* Call Tile - Render a tile showing that a call was started ([#32988](https://github.com/element-hq/element-web/pull/32988)). Contributed by @MidhunSureshR.
+* Update button in incoming call toast to say 'Decline' ([#33405](https://github.com/element-hq/element-web/pull/33405)). Contributed by @robintown.
+* Refactor and redesign user menu ([#32812](https://github.com/element-hq/element-web/pull/32812)). Contributed by @Half-Shot.
+
+## 🐛 Bug Fixes
+
+* Ensure interface gradually reduces visible buttons when viewport shrinks ([#33477](https://github.com/element-hq/element-web/pull/33477)). Contributed by @Half-Shot.
+* Room list: add robustness to custom section loading ([#33475](https://github.com/element-hq/element-web/pull/33475)). Contributed by @florianduros.
+* Make it possible to scroll overflowing hidden events again ([#33481](https://github.com/element-hq/element-web/pull/33481)). Contributed by @robintown.
+* Fix user menu overlap with macos window controls ([#33425](https://github.com/element-hq/element-web/pull/33425)). Contributed by @dbkr.
+* Visually indicate on hover that user menu can be clicked ([#33408](https://github.com/element-hq/element-web/pull/33408)). Contributed by @robintown.
+* Fix TAC badges when hovered ([#33423](https://github.com/element-hq/element-web/pull/33423)). Contributed by @florianduros.
+
+
 Changes in [1.12.18](https://github.com/element-hq/element-web/releases/tag/v1.12.18) (2026-05-12)
 ==================================================================================================
 ## ✨ Features
