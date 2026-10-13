@@ -55,7 +55,6 @@
         "user_menu": {
             "create_an_account": "Vytvořit účet",
             "got_an_account": "Máte účet?",
-            "manage_account": "Spravovat účet",
             "sign_in": "Přihlásit se",
             "title": "Uživatelská nabídka"
         }
@@ -120,10 +119,7 @@
             "no_chats": "Zatím žádné chaty",
             "no_chats_description": "Začněte tím, že někomu pošlete zprávu nebo vytvoříte místnost",
             "no_chats_description_no_room_rights": "Začněte tím, že někomu napíšete zprávu",
-            "no_favourites": "Zatím nemáte žádné oblíbené chaty",
-            "no_favourites_description": "Chat si můžete přidat do oblíbených v nastavení chatu",
             "no_invites": "Nemáte žádné nepřečtené pozvánky",
-            "no_lowpriority": "Nemáte žádné místnosti s nízkou prioritou",
             "no_mentions": "Nemáte žádné nepřečtené zmínky",
             "no_people": "Zatím s nikým nemáte přímé chaty",
             "no_people_description": "Můžete zrušit výběr filtrů, abyste viděli ostatní chaty",
@@ -262,8 +258,6 @@
         "pending_moderation": "Zpráva čeká na moderaci",
         "pending_moderation_reason": "Zpráva čeká na moderaci: %(reason)s",
         "url_preview": {
-            "close": "Zavřít náhled",
-            "open_link": "Otevřít odkaz",
             "show_n_more": {
                 "one": "Zobrazit %(count)s další náhled",
                 "few": "Zobrazit %(count)s další náhledy",

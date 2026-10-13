@@ -26,6 +26,7 @@ test.describe("Encryption tab", () => {
         test.beforeEach(async ({ page, homeserver, credentials }) => {
             // The bot bootstraps cross-signing, creates a key backup and sets up a recovery key
             const botCredentials = { ...credentials };
+            // @ts-expect-error
             delete botCredentials.accessToken; // use a new login for the bot
             const res = await createBot(page, homeserver, botCredentials);
             recoveryKey = res.recoveryKey;
@@ -71,7 +72,7 @@ test.describe("Encryption tab", () => {
             "should prompt to enter the recovery key when the secrets are not cached locally",
             { tag: "@screenshot" },
             async ({ page, app, util }) => {
-                await verifySession(app, recoveryKey.encodedPrivateKey);
+                await verifySession(app, recoveryKey.encodedPrivateKey!);
                 // We need to delete the cached secrets
                 await deleteCachedSecrets(page);
 
@@ -104,7 +105,7 @@ test.describe("Encryption tab", () => {
             app,
             util,
         }) => {
-            await verifySession(app, recoveryKey.encodedPrivateKey);
+            await verifySession(app, recoveryKey.encodedPrivateKey!);
             // We need to delete the cached secrets
             await deleteCachedSecrets(page);
 
@@ -120,14 +121,12 @@ test.describe("Encryption tab", () => {
         });
 
         test("should warn before turning off key storage", { tag: "@screenshot" }, async ({ page, app, util }) => {
-            await verifySession(app, recoveryKey.encodedPrivateKey);
+            await verifySession(app, recoveryKey.encodedPrivateKey!);
             await util.openEncryptionTab();
 
             await page.getByRole("switch", { name: "Allow key storage" }).click();
 
-            await expect(
-                page.getByRole("heading", { name: "Are you sure you want to turn off key storage and delete it?" }),
-            ).toBeVisible();
+            await expect(page.getByRole("heading", { name: "Turn off and delete key storage?" })).toBeVisible();
 
             await expect(util.getEncryptionTabContent()).toMatchScreenshot("delete-key-storage-confirm.png");
 
@@ -169,11 +168,11 @@ test.describe("Encryption tab", () => {
             await page.getByRole("button", { name: "Can't confirm?" }).click();
 
             // First try cancelling and restarting
-            await page.getByRole("button", { name: "Cancel" }).click();
+            await page.getByRole("button", { name: "Go back" }).click();
             await page.getByRole("button", { name: "Can't confirm?" }).click();
 
             // Then click outside the dialog and restart
-            await page.locator("li").filter({ hasText: "Encryption" }).click({ force: true });
+            await page.getByRole("heading", { name: "Settings" }).click({ force: true, position: { x: 0, y: 0 } });
             await page.getByRole("button", { name: "Can't confirm?" }).click();
 
             // Finally we actually continue

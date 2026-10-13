@@ -40,7 +40,7 @@ export async function waitForRoom(
     await client.evaluateHandle(
         (matrixClient, { roomId, predicateId }) => {
             return new Promise<Room>((resolve) => {
-                const room = matrixClient.getRoom(roomId);
+                const room = matrixClient.getRoom(roomId)!;
 
                 if ((<any>window)[predicateId](room)) {
                     resolve(room);
@@ -65,7 +65,7 @@ export async function waitForRoom(
 
 export async function selectHomeserver(page: Page, homeserverUrl: string) {
     await page.getByRole("button", { name: "Edit" }).click();
-    await page.getByRole("textbox", { name: "Other homeserver" }).fill(homeserverUrl);
+    await page.getByRole("textbox", { name: "Other account provider" }).fill(homeserverUrl);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     // wait for the dialog to go away
     await expect(page.locator(".mx_ServerPickerDialog")).toHaveCount(0);

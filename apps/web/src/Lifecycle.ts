@@ -10,21 +10,13 @@ Please see LICENSE files in the repository root for full details.
 */
 
 import { type ReactNode } from "react";
-import {
-    createClient,
-    type MatrixClient,
-    SSOAction,
-    type OidcTokenRefresher,
-    decodeBase64,
-} from "matrix-js-sdk/src/matrix";
+import { type MatrixClient, createClient, SSOAction, decodeBase64 } from "matrix-js-sdk/src/matrix";
 import { type AESEncryptedSecretStoragePayload } from "matrix-js-sdk/src/types";
 import { logger } from "matrix-js-sdk/src/logger";
 
-import { type IMatrixClientCreds, MatrixClientPeg, type MatrixClientPegAssignOpts } from "./MatrixClientPeg";
-import { ModuleRunner } from "./modules/ModuleRunner";
+import { MatrixClientPeg, type MatrixClientPegAssignOpts } from "./MatrixClientPeg";
 import EventIndexPeg from "./indexing/EventIndexPeg";
-import createMatrixClient from "./utils/createMatrixClient";
-import Notifier from "./Notifier";
+import { createMatrixClient, createClientWithCreds, type IMatrixClientCreds } from "./utils/createMatrixClient";
 import UserActivity from "./UserActivity";
 import Presence from "./Presence";
 import dis from "./dispatcher/dispatcher";
@@ -34,6 +26,7 @@ import ActiveWidgetStore from "./stores/ActiveWidgetStore";
 import PlatformPeg from "./PlatformPeg";
 import { sendLoginRequest } from "./Login";
 import * as StorageManager from "./utils/StorageManager";
+import { LegacyCryptoStoreError } from "./utils/LegacyCryptoStoreError.ts";
 import * as StorageAccess from "./utils/StorageAccess";
 import SettingsStore from "./settings/SettingsStore";
 import { SettingLevel } from "./settings/SettingLevel";
@@ -45,8 +38,6 @@ import { Jitsi } from "./widgets/Jitsi";
 import { SSO_HOMESERVER_URL_KEY, SSO_ID_SERVER_URL_KEY, SSO_IDP_ID_KEY } from "./BasePlatform";
 import ThreepidInviteStore from "./stores/ThreepidInviteStore";
 import { PosthogAnalytics } from "./PosthogAnalytics";
-import LegacyCallHandler from "./LegacyCallHandler";
-import LifecycleCustomisations from "./customisations/Lifecycle";
 import ErrorDialog from "./components/views/dialogs/ErrorDialog";
 import { _t } from "./languageHandler";
 import SessionRestoreErrorDialog from "./components/views/dialogs/SessionRestoreErrorDialog";
@@ -56,39 +47,36 @@ import SdkConfig from "./SdkConfig";
 import { DialogOpener } from "./utils/DialogOpener";
 import { Action } from "./dispatcher/actions";
 import { type OverwriteLoginPayload } from "./dispatcher/payloads/OverwriteLoginPayload";
-import { SdkContextClass } from "./contexts/SDKContext";
+import { SDKContextClass } from "./contexts/SDKContextClass";
 import { messageForLoginError } from "./utils/ErrorUtils";
-import { completeOidcLogin, type CompleteOidcLoginResponse } from "./utils/oidc/authorize";
-import { getOidcErrorMessage } from "./utils/oidc/error";
-import { type OidcClientStore } from "./stores/oidc/OidcClientStore";
+import { completeOAuthLogin, type CompleteOAuthLoginResponse } from "./utils/oauth/authorize";
+import { getOAuthErrorMessage } from "./utils/oauth/error";
+import { getStoredOAuthClientId, persistOAuthClientId } from "./utils/oauth/persistOAuthSettings";
 import {
-    getStoredOidcClientId,
-    getStoredOidcIdTokenClaims,
-    getStoredOidcTokenIssuer,
-    persistOidcAuthenticatedSettings,
-} from "./utils/oidc/persistOidcSettings";
-import {
-    ACCESS_TOKEN_IV,
+    ACCESS_TOKEN_NAME,
     ACCESS_TOKEN_STORAGE_KEY,
+    getFallbackStorageKey,
     HAS_ACCESS_TOKEN_STORAGE_KEY,
     HAS_REFRESH_TOKEN_STORAGE_KEY,
-    persistAccessTokenInStorage,
-    persistRefreshTokenInStorage,
-    REFRESH_TOKEN_IV,
+    persistTokens,
+    REFRESH_TOKEN_NAME,
     REFRESH_TOKEN_STORAGE_KEY,
     tryDecryptToken,
 } from "./utils/tokens/tokens";
-import { TokenRefresher } from "./utils/oidc/TokenRefresher";
 import { checkBrowserSupport } from "./SupportedBrowser";
 import { type URLParams } from "./vector/url_utils.ts";
+import { type OnLoggedInPayload } from "./dispatcher/payloads/OnLoggedInPayload.ts";
+import { clearUploadedMediaCache } from "./utils/UploadedMediaCache";
+import { CallStatusListener } from "./CallStatusListener.ts";
+import { CallStore } from "./stores/CallStore.ts";
+import { ModuleApi } from "./modules/Api.ts";
 
 const HOMESERVER_URL_KEY = "mx_hs_url";
 const ID_SERVER_URL_KEY = "mx_is_url";
 
 dis.register((payload) => {
     if (payload.action === Action.TriggerLogout) {
-        // noinspection JSIgnoredPromiseFromCall - we don't care if it fails
-        onLoggedOut();
+        void onLoggedOut();
     } else if (payload.action === Action.OverwriteLogin) {
         const typed = <OverwriteLoginPayload>payload;
         // Stop the current client before overwriting the login.
@@ -115,7 +103,10 @@ dis.register((payload) => {
  */
 let sessionLockStolen = false;
 
-// this is exposed solely for unit tests.
+/**
+ * this is exposed solely for unit tests.
+ * @knipignore
+ */
 export function setSessionLockNotStolen(): void {
     sessionLockStolen = false;
 }
@@ -143,13 +134,103 @@ function checkSessionLock(): void {
 class SessionLockStolenError extends Error {}
 
 interface ILoadSessionOpts {
+    /** Set to true to enable guest access tokens and auto-guest registrations. */
     enableGuest?: boolean;
+    /** Homeserver URL. Only used if `enableGuest` is true; defines the HS to register against. */
     guestHsUrl?: string;
+    /** Identity server URL. Only used if `enableGuest` is true; defines the IS to use. */
     guestIsUrl?: string;
+    /** If the stored session is a guest account, ignore it and don't load it. */
     ignoreGuest?: boolean;
+    /** Default display name to use when registering as a guest. */
     defaultDeviceDisplayName?: string;
+    /** The parameters read in at app load time from the URL. */
     urlParams?: URLParams;
+    /**
+     * Signal that is aborted if the server logs this session out while we are loading it (for example because the
+     * access token expired). If loading then fails, the error is ignored and `loadSession` resolves to `false`.
+     */
     abortSignal?: AbortSignal;
+}
+
+/**
+ * Get the homeserver URL to use for guest access.
+ *
+ * @returns the URL, or undefined if guest access is disabled or no homeserver URL was given.
+ */
+function getGuestHsUrl(opts: ILoadSessionOpts): string | undefined {
+    if (!opts.enableGuest) return undefined;
+    if (!opts.guestHsUrl) {
+        logger.warn("Cannot enable guest access: can't determine HS URL to use");
+        return undefined;
+    }
+    return opts.guestHsUrl;
+}
+
+/**
+ * Attempt to load the session, taking into account whether guest
+ * parameters were provided or the session lock had been used.
+ */
+async function tryLoadSession(opts: ILoadSessionOpts): Promise<boolean> {
+    const guestHsUrl = getGuestHsUrl(opts);
+    const guestCreds = opts.urlParams?.guest;
+
+    if (guestHsUrl && guestCreds?.guest_user_id && guestCreds.guest_access_token) {
+        logger.log("Using guest access credentials");
+        await doSetLoggedIn(
+            {
+                userId: guestCreds.guest_user_id,
+                accessToken: guestCreds.guest_access_token,
+                homeserverUrl: guestHsUrl,
+                identityServerUrl: opts.guestIsUrl,
+                guest: true,
+            },
+            true,
+            false,
+        );
+        return true;
+    }
+
+    if (await restoreSessionFromStorage({ ignoreGuest: Boolean(opts.ignoreGuest) })) {
+        return true;
+    }
+    if (sessionLockStolen) {
+        return false;
+    }
+
+    if (guestHsUrl) {
+        return registerAsGuest(guestHsUrl, opts.guestIsUrl, opts.defaultDeviceDisplayName);
+    }
+
+    // fall back to welcome screen
+    return false;
+}
+
+/**
+ * Handle an error thrown by {@link tryLoadSession}.
+ *
+ * @returns `false` to fall back to the welcome screen, or the result of {@link handleLoadSessionFailure}.
+ * @throws {@link LegacyCryptoStoreError} so that MatrixChat can show a dedicated error screen for it.
+ */
+async function handleLoadSessionError(e: unknown, opts: ILoadSessionOpts): Promise<boolean> {
+    // We may be aborted e.g. because our token expired, so don't show an error here
+    if (opts.abortSignal?.aborted) {
+        return false;
+    }
+
+    if (e instanceof LegacyCryptoStoreError) {
+        // This session predates the rust crypto stack and cannot be migrated. Let this
+        // propagate up to MatrixChat, which shows a dedicated error screen for it.
+        throw e;
+    }
+
+    // If we're aborting login because of a storage inconsistency, or the session lock was stolen while we were
+    // trying to start, we don't need to show the general failure dialog. Instead, just go back to welcome.
+    if (e instanceof AbortLoginAndRebuildStorage || sessionLockStolen) {
+        return false;
+    }
+
+    return handleLoadSessionFailure(e, opts);
 }
 
 /**
@@ -165,85 +246,15 @@ interface ILoadSessionOpts {
  * If any of steps 1-4 are successful, it will call {_doSetLoggedIn}, which in
  * turn will raise on_logged_in and will_start_client events.
  *
- * @param {object} [opts]
- * @param {object} [opts.fragmentQueryParams]: string->string map of the
- *     query-parameters extracted from the #-fragment of the starting URI.
- * @param {boolean} [opts.enableGuest]: set to true to enable guest access
- *     tokens and auto-guest registrations.
- * @param {string} [opts.guestHsUrl]: homeserver URL. Only used if enableGuest
- *     is true; defines the HS to register against.
- * @param {string} [opts.guestIsUrl]: homeserver URL. Only used if enableGuest
- *     is true; defines the IS to use.
- * @param {bool} [opts.ignoreGuest]: If the stored session is a guest account,
- *     ignore it and don't load it.
- * @param {string} [opts.defaultDeviceDisplayName]: Default display name to use
- *     when registering as a guest.
- * @returns {Promise} a promise which resolves when the above process completes.
+ * @returns A promise which resolves when the above process completes.
  *     Resolves to `true` if we ended up starting a session, or `false` if we
  *     failed.
  */
 export async function loadSession(opts: ILoadSessionOpts = {}): Promise<boolean> {
     try {
-        let enableGuest = opts.enableGuest || false;
-        const guestHsUrl = opts.guestHsUrl;
-        const guestIsUrl = opts.guestIsUrl;
-        const urlParams = opts.urlParams;
-        const defaultDeviceDisplayName = opts.defaultDeviceDisplayName;
-
-        if (enableGuest && !guestHsUrl) {
-            logger.warn("Cannot enable guest access: can't determine HS URL to use");
-            enableGuest = false;
-        }
-
-        if (enableGuest && guestHsUrl && urlParams?.guest?.guest_user_id && urlParams?.guest?.guest_access_token) {
-            logger.log("Using guest access credentials");
-            await doSetLoggedIn(
-                {
-                    userId: urlParams.guest.guest_user_id,
-                    accessToken: urlParams.guest.guest_access_token,
-                    homeserverUrl: guestHsUrl,
-                    identityServerUrl: guestIsUrl,
-                    guest: true,
-                },
-                true,
-                false,
-            );
-            return true;
-        }
-        const success = await restoreSessionFromStorage({
-            ignoreGuest: Boolean(opts.ignoreGuest),
-        });
-        if (success) {
-            return true;
-        }
-        if (sessionLockStolen) {
-            return false;
-        }
-
-        if (enableGuest && guestHsUrl) {
-            return registerAsGuest(guestHsUrl, guestIsUrl, defaultDeviceDisplayName);
-        }
-
-        // fall back to welcome screen
-        return false;
+        return await tryLoadSession(opts);
     } catch (e) {
-        // We may be aborted e.g. because our token expired, so don't show an error here
-        if (opts.abortSignal?.aborted) {
-            return false;
-        }
-
-        if (e instanceof AbortLoginAndRebuildStorage) {
-            // If we're aborting login because of a storage inconsistency, we don't
-            // need to show the general failure dialog. Instead, just go back to welcome.
-            return false;
-        }
-
-        // likewise, if the session lock has been stolen while we've been trying to start
-        if (sessionLockStolen) {
-            return false;
-        }
-
-        return handleLoadSessionFailure(e, opts);
+        return handleLoadSessionError(e, opts);
     }
 }
 
@@ -261,7 +272,7 @@ export async function getStoredSessionOwner(): Promise<[string, boolean] | [null
 }
 
 /**
- * If query string includes OIDC authorization code flow parameters attempt to login using oidc flow
+ * If query string includes OAuth2 authorization code flow parameters attempt to login using oauth flow
  * Else, we may be returning from SSO - attempt token login
  *
  * @param urlParams the parameters read in at app load time from the url
@@ -277,30 +288,24 @@ export async function attemptDelegatedAuthLogin(
     defaultDeviceDisplayName?: string,
     fragmentAfterLogin?: string,
 ): Promise<boolean> {
-    if (urlParams.oidc_fragment) {
-        return attemptOidcNativeLogin(urlParams.oidc_fragment, "fragment");
-    } else if (urlParams.oidc_query) {
-        return attemptOidcNativeLogin(urlParams.oidc_query, "query");
+    if (urlParams.oauth2) {
+        return attemptOAuthLogin(urlParams.oauth2);
     }
 
     return attemptTokenLogin(urlParams["legacy_sso"], defaultDeviceDisplayName, fragmentAfterLogin);
 }
 
 /**
- * Attempt to login by completing OIDC authorization code flow
- * @param urlParams subset of app-load url parameters relating to oidc auth
- * @param responseMode - the response_mode used in the auth request
+ * Attempt to login by completing OAuth2 authorization code flow
+ * @param urlParams subset of app-load url parameters relating to oauth auth
  * @returns Promise that resolves to true when login succeeded, else false
  */
-async function attemptOidcNativeLogin(
-    urlParams: NonNullable<URLParams["oidc_fragment"]>,
-    responseMode: "fragment" | "query",
-): Promise<boolean> {
-    console.log("We have OIDC params - attempting OIDC login");
+async function attemptOAuthLogin(urlParams: NonNullable<URLParams["oauth2"]>): Promise<boolean> {
+    console.log("We have OAuth2 params - attempting login");
 
     try {
-        const { accessToken, refreshToken, homeserverUrl, identityServerUrl, idToken, clientId, issuer } =
-            await completeOidcLogin(urlParams, responseMode);
+        const { accessToken, refreshToken, homeserverUrl, identityServerUrl, clientId } =
+            await completeOAuthLogin(urlParams);
 
         await configureFromCompletedOAuthLogin({
             accessToken,
@@ -308,22 +313,20 @@ async function attemptOidcNativeLogin(
             homeserverUrl,
             identityServerUrl,
             clientId,
-            issuer,
-            idToken,
         });
 
         return true;
     } catch (error) {
-        logger.error("Failed to login via OIDC", error);
+        logger.error("Failed to login via OAuth", error);
 
-        onFailedDelegatedAuthLogin(getOidcErrorMessage(error as Error));
+        onFailedDelegatedAuthLogin(getOAuthErrorMessage(error as Error));
         return false;
     }
 }
 
 /**
- * Exchange the given OIDC credentials for {@link IMatrixClientCreds}, additionally persisting them to storage.
- * @param creds the credentials from the OIDC flow
+ * Exchange the given OAuth2 credentials for {@link IMatrixClientCreds}, additionally persisting them to storage.
+ * @param creds the credentials from the OAuth2 flow
  */
 export async function configureFromCompletedOAuthLogin({
     accessToken,
@@ -331,9 +334,7 @@ export async function configureFromCompletedOAuthLogin({
     homeserverUrl,
     identityServerUrl,
     clientId,
-    issuer,
-    idToken,
-}: Omit<CompleteOidcLoginResponse, "idTokenClaims">): Promise<IMatrixClientCreds> {
+}: CompleteOAuthLoginResponse): Promise<IMatrixClientCreds> {
     const {
         user_id: userId,
         device_id: deviceId,
@@ -350,10 +351,10 @@ export async function configureFromCompletedOAuthLogin({
         isGuest,
     };
 
-    logger.debug("Logged in via OIDC native flow");
+    logger.debug("Logged in via OAuth2 native flow");
     await onSuccessfulDelegatedAuthLogin(credentials);
     // this needs to happen after success handler which clears storages
-    persistOidcAuthenticatedSettings(clientId, issuer, idToken);
+    persistOAuthClientId(clientId);
     return credentials;
 }
 
@@ -454,7 +455,19 @@ async function loadOrCreatePickleKey(credentials: IMatrixClientCreds): Promise<s
     // Try to load the pickle key
     const userId = credentials.userId;
     const deviceId = credentials.deviceId;
-    let pickleKey = (await PlatformPeg.get()?.getPickleKey(userId, deviceId ?? "")) ?? undefined;
+    let pickleKey: string | undefined;
+    try {
+        pickleKey = (await PlatformPeg.get()?.getPickleKey(userId, deviceId ?? "")) ?? undefined;
+    } catch (e) {
+        logger.error(`Failed to read pickle key for ${userId}|${deviceId}`, e);
+        // Fall through and try to create a new one. This is assumed to not destroy anything because
+        // both callers of this function are fresh logins with a server-issued device ID and clear
+        // all storage around this point (onSuccessfulDelegatedAuthLogin before, setLoggedIn ->
+        // doSetLoggedIn after), so no data encrypted under a previous pickle key for this device
+        // survives.
+        // If creation also fails we end up with no pickle key and the tokens are stored unencrypted.
+    }
+
     if (!pickleKey) {
         // Create it if it did not exist
         pickleKey =
@@ -476,7 +489,7 @@ async function loadOrCreatePickleKey(credentials: IMatrixClientCreds): Promise<s
 }
 
 /**
- * Called after a successful token login or OIDC authorization.
+ * Called after a successful token login or OAuth2 authorization.
  * Clear storage then save new credentials in storage
  * @param credentials as returned from login
  */
@@ -493,7 +506,7 @@ async function onSuccessfulDelegatedAuthLogin(credentials: IMatrixClientCreds): 
 type TryAgainFunction = () => void;
 
 /**
- * Display a friendly error to the user when token login or OIDC authorization fails
+ * Display a friendly error to the user when token login or OAuth2 authorization fails
  * @param description error description
  * @param tryAgain OPTIONAL function to call on try again button from error dialog
  */
@@ -504,7 +517,7 @@ function onFailedDelegatedAuthLogin(description: string | ReactNode, tryAgain?: 
         button: _t("action|try_again"),
     });
 
-    finished.then(([shouldTryAgain]) => {
+    void finished.then(([shouldTryAgain]) => {
         // if we have a tryAgain callback, call it the primary 'try again' button was clicked in the dialog
         if (shouldTryAgain) tryAgain?.();
     });
@@ -565,14 +578,33 @@ export interface IStoredSession {
  * @param storageKey key used to store the token, eg ACCESS_TOKEN_STORAGE_KEY
  * @returns Promise that resolves to token or undefined
  */
-async function getStoredToken(storageKey: string): Promise<string | undefined> {
-    let token: string | undefined;
+async function getStoredToken(storageKey: string): Promise<string | AESEncryptedSecretStoragePayload | undefined> {
+    // A token at the fallback key was written because an IndexedDB write failed, and is cleared
+    // again as soon as one succeeds. It is therefore always at least as new as whatever
+    // IndexedDB holds, and must take precedence — otherwise a stale IndexedDB value shadows it
+    // forever, and a rotated refresh token is silently lost.
+    const fallbackStorageKey = getFallbackStorageKey(storageKey);
+    const fallbackToken = localStorage.getItem(fallbackStorageKey) ?? undefined;
+    if (fallbackToken) {
+        logger.warn(`Using localStorage fallback for ${storageKey}; a previous IndexedDB write failed`);
+        try {
+            // try to move the token back into IndexedDB now that it may be writable again
+            await StorageAccess.idbSave("account", storageKey, fallbackToken);
+            localStorage.removeItem(fallbackStorageKey);
+        } catch (e) {
+            logger.error(`Recovery of token ${storageKey} into IndexedDB failed`, e);
+        }
+        return fallbackToken;
+    }
+
+    let token: string | AESEncryptedSecretStoragePayload | undefined;
     try {
         token = await StorageAccess.idbLoad("account", storageKey);
     } catch (e) {
         logger.error(`StorageManager.idbLoad failed for account:${storageKey}`, e);
     }
     if (!token) {
+        // Legacy location, from before tokens were moved into IndexedDB.
         token = localStorage.getItem(storageKey) ?? undefined;
         if (token) {
             try {
@@ -584,6 +616,17 @@ async function getStoredToken(storageKey: string): Promise<string | undefined> {
             }
         }
     }
+
+    // Note that when IndexedDB has a token we ignore any token at the primary key in localStorage,
+    // rather than treating it as a fallback. It is residue from an older version of
+    // persistTokenInStorage, whose fallback wrote there rather than to the fallback key above, and
+    // which never cleared it after a later successful write — so it may well be older than the
+    // IndexedDB copy, and preferring it could demote a working session to a dead token.
+    //
+    // We do not delete it here either. This is a read path, and the token we just loaded may yet
+    // turn out to be undecryptable (see tryDecryptToken), in which case that plaintext copy is the
+    // only way back into the account. persistTokenInStorage sweeps it up once it has successfully
+    // written a token of its own, which proves the copy is spare.
     return token;
 }
 
@@ -627,6 +670,40 @@ async function abortLogin(): Promise<void> {
     }
 }
 
+/**
+ * Process a token which was loaded from storage by {@link getStoredToken} and decrypt if needed.
+ *
+ * {@link tryDecryptToken} only handles the encrypted case, so the two situations it used to absorb
+ * are decided here instead: a token persisted while no pickle key was available is stored as a
+ * plain string and is returned as-is, and an encrypted token with no pickle key to decrypt it is
+ * unrecoverable.
+ *
+ * @param pickleKey Pickle key for this session, or undefined if none could be read.
+ * @param token The token as it came out of storage.
+ * @param tokenName Name of the token, e.g. {@link ACCESS_TOKEN_NAME}.
+ *
+ * @returns the decrypted token.
+ * @throws if the token is encrypted but cannot be decrypted.
+ */
+async function processStoredToken(
+    pickleKey: string | undefined,
+    token: string | AESEncryptedSecretStoragePayload,
+    tokenName: string,
+): Promise<string> {
+    if (typeof token === "string") {
+        // Stored unencrypted, because there was no pickle key when it was persisted.
+        return token;
+    }
+
+    if (!pickleKey) {
+        // The token is encrypted and we have no way to read it. Keep this message stable: it is the
+        // signature support uses to identify this failure in rageshake logs.
+        throw new Error(`Error decrypting secret ${tokenName}: no pickle key found.`);
+    }
+
+    return tryDecryptToken(pickleKey, token, tokenName);
+}
+
 /** Attempt to restore the session from localStorage or indexeddb.
  *
  * If the credentials are found, and the session is successfully restored,
@@ -665,15 +742,21 @@ export async function restoreSessionFromStorage(opts?: { ignoreGuest?: boolean }
             return false;
         }
 
-        const pickleKey = (await PlatformPeg.get()?.getPickleKey(userId, deviceId ?? "")) ?? undefined;
+        let pickleKey: string | undefined;
+        try {
+            pickleKey = (await PlatformPeg.get()?.getPickleKey(userId, deviceId ?? "")) ?? undefined;
+        } catch (e) {
+            logger.error(`Failed to read pickle key for ${userId}|${deviceId}`, e);
+        }
+
         if (pickleKey) {
             logger.log(`Got pickle key for ${userId}|${deviceId}`);
         } else {
             logger.log(`No pickle key available for ${userId}|${deviceId}`);
         }
-        const decryptedAccessToken = await tryDecryptToken(pickleKey, accessToken, ACCESS_TOKEN_IV);
+        const decryptedAccessToken = await processStoredToken(pickleKey, accessToken, ACCESS_TOKEN_NAME);
         const decryptedRefreshToken =
-            refreshToken && (await tryDecryptToken(pickleKey, refreshToken, REFRESH_TOKEN_IV));
+            refreshToken && (await processStoredToken(pickleKey, refreshToken, REFRESH_TOKEN_NAME));
 
         const freshLogin = sessionStorage.getItem("mx_fresh_login") === "true";
         sessionStorage.removeItem("mx_fresh_login");
@@ -728,9 +811,9 @@ async function handleLoadSessionFailure(e: unknown, loadSessionOpts?: ILoadSessi
  * Also stops the old MatrixClient and clears old credentials/etc out of
  * storage before starting the new client.
  *
- * This function does not work for OIDC login.
+ * This function does not work for OAuth2 login.
  * Storage is cleared early in the process so the required data is lost.
- * You must use {@link attemptDelegatedAuthLogin} followed by {@link restoreSessionFromStorage} for OIDC login.
+ * You must use {@link attemptDelegatedAuthLogin} followed by {@link restoreSessionFromStorage} for OAuth2 login.
  *
  * @param {IMatrixClientCreds} credentials The credentials to use
  *
@@ -773,49 +856,15 @@ export async function hydrateSession(credentials: IMatrixClientCreds): Promise<M
 
     if (!credentials.pickleKey && credentials.deviceId !== undefined) {
         logger.info("Lifecycle#hydrateSession: Pickle key not provided - trying to get one");
-        credentials.pickleKey =
-            (await PlatformPeg.get()?.getPickleKey(credentials.userId, credentials.deviceId)) ?? undefined;
+        try {
+            credentials.pickleKey =
+                (await PlatformPeg.get()?.getPickleKey(credentials.userId, credentials.deviceId)) ?? undefined;
+        } catch (e) {
+            logger.error(`Failed to read pickle key for ${credentials.userId}|${credentials.deviceId}`, e);
+        }
     }
 
     return doSetLoggedIn(credentials, overwrite, false);
-}
-
-/**
- * When we have a authenticated via OIDC-native flow and have a refresh token
- * try to create a token refresher.
- * @param credentials from current session
- * @param clientId OIDC client ID
- * @throws If credentials.refreshToken or credentials.deviceId is falsy, or if no token issuer is stored
- * @returns Promise that resolves to a TokenRefresher
- */
-async function createOidcTokenRefresher(
-    credentials: IMatrixClientCreds,
-    clientId: string,
-): Promise<OidcTokenRefresher> {
-    if (!credentials.refreshToken) {
-        throw new Error("A refresh token must be supplied in order to create an OIDC token refresher.");
-    }
-    // stored token issuer indicates we authenticated via OIDC-native flow
-    const tokenIssuer = getStoredOidcTokenIssuer();
-    if (!tokenIssuer) {
-        throw new Error("Cannot create an OIDC token refresher as no stored OIDC token issuer was found.");
-    }
-
-    const idTokenClaims = getStoredOidcIdTokenClaims();
-    const redirectUri = PlatformPeg.get()!.getOidcCallbackUrl().href;
-    const deviceId = credentials.deviceId;
-    if (!deviceId) {
-        throw new Error("Expected deviceId in user credentials.");
-    }
-    const tokenRefresher = new TokenRefresher(
-        tokenIssuer,
-        clientId,
-        redirectUri,
-        deviceId,
-        idTokenClaims!,
-        credentials.userId,
-    );
-    return tokenRefresher;
 }
 
 /**
@@ -867,21 +916,19 @@ async function doSetLoggedIn(
         await abortLogin();
     }
 
-    let storedClientid;
-    try {
-        storedClientid = getStoredOidcClientId();
-    } catch {}
-
-    let tokenRefresher;
-    if (credentials.refreshToken && storedClientid) {
-        tokenRefresher = await createOidcTokenRefresher(credentials, storedClientid);
-    } else {
-        logger.debug("No refresh token was supplied: access token will not be refreshed");
-    }
-
     // check the session lock just before creating the new client
     checkSessionLock();
-    MatrixClientPeg.replaceUsingCreds(credentials, tokenRefresher?.doRefreshAccessToken.bind(tokenRefresher));
+
+    let oauthClientId: string | undefined;
+    if (credentials.refreshToken) {
+        try {
+            oauthClientId = getStoredOAuthClientId();
+        } catch (e) {
+            logger.warn("Have a refresh token but no stored OAuth2 client ID: tokens will not be refreshed", e);
+        }
+    }
+
+    MatrixClientPeg.set(createClientWithCreds(credentials, oauthClientId));
     const client = MatrixClientPeg.safeGet();
 
     setSentryUser(credentials.userId);
@@ -903,11 +950,14 @@ async function doSetLoggedIn(
     }
     checkSessionLock();
 
-    // We are now logged in, so fire this. We have yet to start the client but the
-    // client_started dispatch is for that.
-    dis.fire(Action.OnLoggedIn);
+    // We are now logged in, so fire this. We have yet to start the client but the client_started dispatch is for that.
+    // Dispatch this synchronously so SDKContextClass can set the client for other modules to consume.
+    dis.dispatch<OnLoggedInPayload>({ action: Action.OnLoggedIn, client }, true);
 
-    const clientPegOpts: MatrixClientPegAssignOpts = {};
+    const clientPegOpts: MatrixClientPegAssignOpts = {
+        x509: ModuleApi.instance.client.creationManagement.x509 ?? undefined,
+    };
+
     if (credentials.pickleKey) {
         // The pickleKey, if provided, is probably a base64-encoded 256-bit key, so can be used for the crypto store.
         if (credentials.pickleKey.length === 43) {
@@ -927,10 +977,10 @@ async function doSetLoggedIn(
     // Run the migrations after the MatrixClientPeg has been assigned
     SettingsStore.runMigrations(isFreshLogin);
 
-    if (isFreshLogin && !credentials.guest) {
+    if (isFreshLogin && !credentials.guest && SdkConfig.get("force_verification")) {
         // For newly registered users, set a flag so that we force them to verify,
         // (we don't want to force users with existing sessions to verify though)
-        localStorage.setItem("must_verify_device", "true");
+        localStorage.setItem("force_verification_on_at_login", "true");
     }
 
     return client;
@@ -954,8 +1004,7 @@ async function persistCredentials(credentials: IMatrixClientCreds): Promise<void
     localStorage.setItem("mx_user_id", credentials.userId);
     localStorage.setItem("mx_is_guest", JSON.stringify(credentials.guest));
 
-    await persistAccessTokenInStorage(credentials.accessToken, credentials.pickleKey);
-    await persistRefreshTokenInStorage(credentials.refreshToken, credentials.pickleKey);
+    await persistTokens(credentials.pickleKey, credentials);
 
     if (credentials.pickleKey) {
         localStorage.setItem("mx_has_pickle_key", String(true));
@@ -974,36 +1023,15 @@ async function persistCredentials(credentials: IMatrixClientCreds): Promise<void
         localStorage.setItem("mx_device_id", credentials.deviceId);
     }
 
-    ModuleRunner.instance.extensions.cryptoSetup?.persistCredentials(credentials);
-
     logger.log(`Session persisted for ${credentials.userId}`);
 }
 
 let _isLoggingOut = false;
 
 /**
- * Logs out the current session.
- * When user has authenticated using OIDC native flow revoke tokens with OIDC provider.
- * Otherwise, call /logout on the homeserver.
- * @param client
- * @param oidcClientStore
- */
-async function doLogout(client: MatrixClient, oidcClientStore?: OidcClientStore): Promise<void> {
-    if (oidcClientStore?.isUserAuthenticatedWithOidc) {
-        const accessToken = client.getAccessToken() ?? undefined;
-        const refreshToken = client.getRefreshToken() ?? undefined;
-
-        await oidcClientStore.revokeTokens(accessToken, refreshToken);
-    } else {
-        await client.logout(true);
-    }
-}
-
-/**
  * Logs the current session out and transitions to the logged-out state
- * @param oidcClientStore store instance from SDKContext
  */
-export function logout(oidcClientStore?: OidcClientStore): void {
+export async function logout(): Promise<void> {
     const client = MatrixClientPeg.get();
     if (!client) return;
 
@@ -1018,19 +1046,14 @@ export function logout(oidcClientStore?: OidcClientStore): void {
     }
 
     _isLoggingOut = true;
-    PlatformPeg.get()?.destroyPickleKey(client.getSafeUserId(), client.getDeviceId() ?? "");
+    void PlatformPeg.get()?.destroyPickleKey(client.getSafeUserId(), client.getDeviceId() ?? "");
 
-    doLogout(client, oidcClientStore).then(onLoggedOut, (err) => {
-        // Just throwing an error here is going to be very unhelpful
-        // if you're trying to log out because your server's down and
-        // you want to log into a different server, so just forget the
-        // access token. It's annoying that this will leave the access
-        // token still valid, but we should fix this by having access
-        // tokens expire (and if you really think you've been compromised,
-        // change your password).
+    try {
+        await client.logout(true);
+    } catch (err) {
         logger.warn("Failed to call logout API: token will not be invalidated", err);
-        onLoggedOut();
-    });
+    }
+    await onLoggedOut();
 }
 
 export function softLogout(): void {
@@ -1090,16 +1113,16 @@ async function startMatrixClient(
     dis.dispatch({ action: Action.WillStartClient }, true);
 
     // reset things first just in case
-    SdkContextClass.instance.typingStore.reset();
+    SDKContextClass.instance.typingStore.reset();
     ToastStore.sharedInstance().reset();
 
     DialogOpener.instance.prepare(client);
-    Notifier.start();
+    SDKContextClass.instance.notifier.start();
     UserActivity.sharedInstance().start();
     DMRoomMap.makeShared(client).start();
     IntegrationManagers.sharedInstance().startWatching();
     ActiveWidgetStore.instance.start();
-    LegacyCallHandler.instance.start();
+    SDKContextClass.instance.legacyCallHandler.start();
     checkBrowserSupport();
 
     // Start Mjolnir even though we haven't checked the feature flag yet. Starting
@@ -1122,10 +1145,12 @@ async function startMatrixClient(
 
     // This needs to be started after crypto is set up
     DeviceListener.sharedInstance().start(client);
-    // Similarly, don't start sending presence updates until we've started
-    // the client
+
+    CallStatusListener.sharedInstance().start(CallStore.instance, client);
+
+    // Similarly, don't start sending presence updates until we've started the client
     if (!SettingsStore.getValue("lowBandwidth")) {
-        Presence.start();
+        void Presence.start();
     }
 
     // Now that we have a MatrixClientPeg, update the Jitsi info
@@ -1142,7 +1167,7 @@ async function startMatrixClient(
 
 /*
  * Stops a running client and all related services, and clears persistent
- * storage. Used after a session has been logged out.
+ * storage. Used after a session has been logged out (or at least attempted to be logged out).
  */
 export async function onLoggedOut(): Promise<void> {
     // Ensure that we dispatch a view change **before** stopping the client,
@@ -1151,7 +1176,7 @@ export async function onLoggedOut(): Promise<void> {
     dis.fire(Action.OnLoggedOut, true);
     stopMatrixClient();
     await clearStorage({ deleteEverything: true });
-    LifecycleCustomisations.onLoggedOutAndStorageCleared?.();
+    clearUploadedMediaCache();
     await PlatformPeg.get()?.clearStorage();
     SettingsStore.reset();
 
@@ -1225,15 +1250,16 @@ export async function clearStorage(opts?: { deleteEverything?: boolean }): Promi
  * on MatrixClientPeg after stopping.
  */
 export function stopMatrixClient(unsetClient = true): void {
-    Notifier.stop();
-    LegacyCallHandler.instance.stop();
+    SDKContextClass.instance.legacyCallHandler.stop();
+    SDKContextClass.instance.notifier.stop();
     UserActivity.sharedInstance().stop();
-    SdkContextClass.instance.typingStore.reset();
+    SDKContextClass.instance.typingStore.reset();
     Presence.stop();
     ActiveWidgetStore.instance.stop();
     IntegrationManagers.sharedInstance().stopWatching();
     Mjolnir.sharedInstance().stop();
     DeviceListener.sharedInstance().stop();
+    CallStatusListener.sharedInstance().stop();
     DMRoomMap.shared()?.stop();
     EventIndexPeg.stop();
     const cli = MatrixClientPeg.get();
@@ -1243,8 +1269,8 @@ export function stopMatrixClient(unsetClient = true): void {
 
         if (unsetClient) {
             MatrixClientPeg.unset();
-            EventIndexPeg.unset();
-            cli.store.destroy();
+            void EventIndexPeg.unset();
+            void cli.store.destroy();
         }
     }
 }

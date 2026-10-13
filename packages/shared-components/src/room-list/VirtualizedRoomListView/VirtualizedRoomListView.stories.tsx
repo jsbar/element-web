@@ -34,9 +34,15 @@ const RoomListWrapperImpl = ({
     getRoomItemViewModel,
     getSectionHeaderViewModel,
     updateVisibleRooms,
+    updateVisibleFold,
     closeToast,
+    scrollToUnreadActivity,
+    setScrollToIndex,
     renderAvatar: renderAvatarProp,
     changeRoomSection,
+    changeSectionOrder,
+    onSectionOrRoomDragStart,
+    onSectionOrRoomDragEnd,
     ...rest
 }: RoomListStoryProps): JSX.Element => {
     const vm = useMockedViewModel(rest, {
@@ -46,8 +52,14 @@ const RoomListWrapperImpl = ({
         getRoomItemViewModel,
         getSectionHeaderViewModel,
         updateVisibleRooms,
+        updateVisibleFold,
         closeToast,
+        scrollToUnreadActivity,
+        setScrollToIndex,
         changeRoomSection,
+        changeSectionOrder,
+        onSectionOrRoomDragStart,
+        onSectionOrRoomDragEnd,
     });
 
     return (
@@ -84,10 +96,16 @@ const meta = {
         getRoomItemViewModel: createGetRoomItemViewModel(mock10RoomsIds),
         getSectionHeaderViewModel: createGetSectionHeaderViewModel(mock10RoomsSections.map((section) => section.id)),
         updateVisibleRooms: fn(),
+        updateVisibleFold: fn(),
         renderAvatar,
         isFlatList: true,
         closeToast: fn(),
+        scrollToUnreadActivity: fn(),
+        setScrollToIndex: fn(),
         changeRoomSection: fn(),
+        changeSectionOrder: fn(),
+        onSectionOrRoomDragStart: fn(),
+        onSectionOrRoomDragEnd: fn(),
     },
     parameters: {
         design: {

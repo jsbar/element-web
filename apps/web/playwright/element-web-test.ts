@@ -20,7 +20,6 @@ import {
     type ToMatchScreenshotOptions,
 } from "@element-hq/element-web-playwright-common";
 
-import type { IConfigOptions } from "../src/IConfigOptions";
 import { type Credentials } from "./plugins/homeserver";
 import { ElementAppPage } from "./pages/ElementAppPage";
 import { Crypto } from "./pages/crypto";
@@ -31,11 +30,6 @@ import { type WorkerOptions, type Services, test as base } from "./services";
 // Enable experimental service worker support
 // See https://playwright.dev/docs/service-workers-experimental#how-to-enable
 process.env["PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS"] = "1";
-
-declare module "@element-hq/element-web-playwright-common" {
-    // Improve the type for the config fixture based on the real type
-    export interface Config extends Omit<IConfigOptions, "default_server_config"> {}
-}
 
 export interface CredentialsWithDisplayName extends Credentials {
     displayName: string;
@@ -50,8 +44,8 @@ export interface TestFixtures extends BaseTestFixtures {
     app: ElementAppPage;
 
     crypto: Crypto;
-    room?: { roomId: string };
-    uut?: Locator; // Unit Under Test, useful place to refer a prepared locator
+    room: { roomId: string };
+    uut: Locator; // Unit Under Test, useful place to refer a prepared locator
     botCreateOpts: CreateBotOpts;
     bot: Bot;
     webserver: Webserver;
@@ -99,7 +93,6 @@ export const test = base.extend<TestFixtures>({
         await bot.onTestFinished(testInfo);
     },
 
-    // eslint-disable-next-line no-empty-pattern
     webserver: async ({}, use) => {
         const webserver = new Webserver();
         await use(webserver);
@@ -135,7 +128,10 @@ export const expect = baseExpect.extend<Expectations>({
             .mx_DisambiguatedProfile_displayName {
                 color: var(--cpd-color-blue-1200) !important;
             }
-            .mx_BaseAvatar {
+            /* Avatar colours are derived from the random MXID, so pin them. */
+            /* Compound avatars rendered by shared components don't have the mx_BaseAvatar class so use a loose Compound class selector */
+            .mx_BaseAvatar,
+            [class*="_avatar-imageless_"] {
                 background-color: var(--cpd-color-fuchsia-1200) !important;
                 border-color: var(--cpd-color-fuchsia-1200) !important;
                 color: white !important;

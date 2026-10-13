@@ -57,6 +57,15 @@ If both `default_server_config` and `default_server_name` are used, Element will
 information using `.well-known`, and if that fails, take `default_server_config` as the homeserver connection
 information.
 
+1. `enable_client_well_known_lookups`: Controls whether Element makes runtime requests to the logged-in user's
+   [`<server_name>/.well-known/matrix/...`](https://spec.matrix.org/latest/client-server-api/#getwell-knownmatrixclient)
+   endpoints (for example, polling for client configuration after login). Set it to `false` to stop Element making these
+   requests, so it only contacts the homeserver base URL; the `well_known` object returned inline in the `/login` response
+   is unaffected. Defaults to `true`.
+   This option covers those runtime requests only; login-time `.well-known` autodiscovery is separate. Setting
+   `default_server_config` with `disable_custom_urls: true` fixes the homeserver and removes the server picker, covering
+   the startup lookup and server selection. It also doesn't cover the legacy password login form (not shown for delegated authentication/OIDC) which performs its own `.well-known` lookup when a full Matrix ID is entered.
+
 ## Labs flags
 
 Labs flags are optional, typically beta or in-development, features that can be turned on or off. The full range of
@@ -109,7 +118,7 @@ instance. As of writing those settings are not fully documented, however a few a
     }
     ```
     These values will take priority over the hardcoded defaults for the settings. For a list of available settings, see
-    [Settings.tsx](https://github.com/element-hq/element-web/blob/develop/src/settings/Settings.tsx).
+    [Settings.tsx](https://github.com/element-hq/element-web/blob/develop/apps/web/src/settings/Settings.tsx).
 
 ## Customisation & branding
 
@@ -161,7 +170,7 @@ complete re-branding/private labeling, a more personalised experience can be ach
 19. `help_url`: The URL to point users to for help with the app, defaults to `https://element.io/help`.
 20. `help_encryption_url`: The URL to point users to for help with encryption, defaults to `https://element.io/help#encryption`.
 21. `help_key_storage_url`: The URL to point users to for help with key storage, defaults to `https://element.io/help#encryption5`.
-22. `force_verification`: If true, users must verify new logins (eg. with another device / their recovery key)
+22. `force_verification`: If true, users must verify new logins (eg. with another device / their recovery key). Defaults to true.
 
 ### `desktop_builds` and `mobile_builds`
 
@@ -298,7 +307,6 @@ The following subproperties are available:
 2. `logo_uri`: Optional URI for the client logo.
 3. `tos_uri`: Optional URI for the client's terms of service.
 4. `policy_uri`: Optional URI for the client's privacy policy.
-5. `contacts`: Optional list of contact emails for the client.
 
 As an example:
 
@@ -308,8 +316,7 @@ As an example:
         "client_uri": "https://example.com",
         "logo_uri": "https://example.com/logo.png",
         "tos_uri": "https://example.com/tos",
-        "policy_uri": "https://example.com/policy",
-        "contacts": ["support@example.com"]
+        "policy_uri": "https://example.com/policy"
     }
 }
 ```
@@ -390,7 +397,12 @@ The VoIP and Jitsi options are:
    at any time without notice.
 6. `element_call`: Optional configuration for native group calls using Element Call, with the following subkeys:
     - `use_exclusively`: A boolean specifying whether Element Call should be used exclusively as the only VoIP stack in
-      the app, removing the ability to start legacy 1:1 calls or Jitsi calls. Defaults to `false`.
+      the app, removing the ability to enable legacy 1:1 calls or Jitsi calls.
+      It is a misconfiguration if its set to true while `element_call.disable` is also true!
+      Defaults to `false`.
+    - `disable`: A boolean flag specifying whether Element Call should be disabled.
+      If `true`, `element_call.use_exclusively` has no effect!
+      Defaults to `false`.
     - `brand`: Optional name for the app. Defaults to `Element Call`. This is
       used throughout the application in various strings/locations.
     - `guest_spa_url`: Optional URL for an Element Call single-page app (SPA),
@@ -586,8 +598,6 @@ Currently, the following UI feature flags are supported:
 
 `modules`: An optional array of module paths to load at runtime. Each entry is a URL or path to a JavaScript module entry point that will be dynamically imported when Element Web starts.
 
-**Note:** This is separate from the build-time module system configured via `build_config.yaml`. Runtime modules are loaded dynamically from the paths specified in `config.json`, while build-time modules are bundled during compilation.
-
 **Example:**
 
 ```json
@@ -596,7 +606,7 @@ Currently, the following UI feature flags are supported:
 }
 ```
 
-Each module URL is loaded using dynamic import (`import()`). The modules are loaded in order after Element Web initializes but before the application fully starts. Modules must be accessible from the browser and should export a compatible module format that works with the [Module API](https://github.com/element-hq/element-modules/tree/main/packages/element-web-module-api).
+Each module URL is loaded using dynamic import (`import()`). The modules are loaded in order after Element Web initializes but before the application fully starts. Modules must be accessible from the browser and should export a compatible module format that works with the [Module API](https://github.com/element-hq/element-web/tree/develop/packages/module-api).
 
 ## Undocumented / developer options
 

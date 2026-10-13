@@ -15,7 +15,7 @@ import MemberAvatar from "../avatars/MemberAvatar";
 import {
     useUserIdentityWarningViewModel,
     type ViolationPrompt,
-} from "../../viewmodels/rooms/UserIdentityWarningViewModel.tsx";
+} from "../../viewmodels/rooms/UserIdentityWarningViewModel";
 import { type ButtonEvent } from "../elements/AccessibleButton.tsx";
 
 interface UserIdentityWarningProps {
@@ -37,7 +37,7 @@ interface UserIdentityWarningProps {
  * button to acknowledge the change.
  */
 export const UserIdentityWarning: React.FC<UserIdentityWarningProps> = ({ room }) => {
-    const { currentPrompt, dispatchAction } = useUserIdentityWarningViewModel(room, room.roomId);
+    const { currentPrompt, dispatchAction } = useUserIdentityWarningViewModel(room);
 
     if (!currentPrompt) return null;
 

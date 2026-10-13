@@ -21,7 +21,7 @@ test.describe("Advanced section in Encryption tab", () => {
         const section = util.getEncryptionDetailsSection();
 
         const deviceId = await page.evaluate(() => window.mxMatrixClientPeg.get().getDeviceId());
-        await expect(section.getByText(deviceId)).toBeVisible();
+        await expect(section.getByText(deviceId!)).toBeVisible();
 
         await expect(section).toMatchScreenshot("encryption-details.png", {
             mask: [section.getByTestId("deviceId"), section.getByTestId("sessionKey")],
@@ -53,16 +53,16 @@ test.describe("Advanced section in Encryption tab", () => {
             const tab = await util.openEncryptionTab();
             const section = util.getEncryptionDetailsSection();
 
-            await section.getByRole("button", { name: "Reset cryptographic identity" }).click();
+            await section.getByRole("button", { name: "Reset digital identity" }).click();
             await expect(util.getEncryptionTabContent()).toMatchScreenshot("reset-cryptographic-identity.png");
             await tab.getByRole("button", { name: "Continue" }).click();
 
             // Fill password dialog and validate
             const dialog = page.locator(".mx_InteractiveAuthDialog");
-            await dialog.getByRole("textbox", { name: "Password" }).fill(credentials.password);
+            await dialog.getByRole("textbox", { name: "Password" }).fill(credentials.password!);
             await dialog.getByRole("button", { name: "Continue" }).click();
 
-            await expect(section.getByRole("button", { name: "Reset cryptographic identity" })).toBeVisible();
+            await expect(section.getByRole("button", { name: "Reset digital identity" })).toBeVisible();
 
             // After resetting the identity, the user should set up a new recovery key
             await expect(

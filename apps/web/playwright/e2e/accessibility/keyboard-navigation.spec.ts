@@ -65,7 +65,7 @@ test.describe("Landmark navigation tests", () => {
                 await cli.invite(bobRoom.room_id, bob);
             },
             {
-                bob: bob.credentials.userId,
+                bob: bob.credentials!.userId,
             },
         );
 
@@ -118,7 +118,7 @@ test.describe("Landmark navigation tests", () => {
                 await cli.invite(bobRoom.room_id, bob);
             },
             {
-                bob: bob.credentials.userId,
+                bob: bob.credentials!.userId,
             },
         );
 
@@ -129,6 +129,9 @@ test.describe("Landmark navigation tests", () => {
 
         // Close the room
         await page.goto("/#/home");
+        // Wait for the room's message composer to fully unmount, to avoid a race condition
+        await expect(page.locator(".mx_MessageComposer")).not.toBeAttached();
+        await expect(page.locator(".mx_HomePage")).toBeVisible();
 
         // Pressing Control+F6 will first focus the space button
         await page.keyboard.press("ControlOrMeta+F6");

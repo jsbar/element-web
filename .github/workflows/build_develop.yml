@@ -17,7 +17,7 @@ jobs:
         name: "Build & Deploy develop.element.io"
         # Only respect triggers from our develop branch, ignore that of forks
         if: github.repository == 'element-hq/element-web'
-        runs-on: ubuntu-24.04
+        runs-on: ubuntu-26.04
         environment: develop
         permissions:
             checks: read
@@ -28,15 +28,14 @@ jobs:
             R2_URL: ${{ vars.CF_R2_S3_API }}
             R2_PUBLIC_URL: "https://element-web-develop.element.io"
         steps:
-            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
               with:
                   persist-credentials: false
 
-            - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-            - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+            - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
               with:
-                  cache: "pnpm"
-                  node-version: "lts/*"
+                  cache: true
+                  install: false
 
             - name: Install Dependencies
               run: "./scripts/layered.sh"
@@ -127,7 +126,7 @@ jobs:
 
             - name: Deploy to Cloudflare Pages
               id: cfp
-              uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+              uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
               with:
                   apiToken: ${{ secrets.CF_PAGES_TOKEN }}
                   accountId: ${{ secrets.CF_PAGES_ACCOUNT_ID }}

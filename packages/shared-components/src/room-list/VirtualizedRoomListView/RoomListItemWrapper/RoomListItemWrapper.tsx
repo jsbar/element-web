@@ -14,6 +14,7 @@ import { useMergeRefs } from "react-merge-refs";
 import { RoomListItemView, type RoomListItemViewProps } from "./RoomListItemView";
 import { getItemAccessibleProps } from "../../../core/VirtualizedList";
 import { useViewModel } from "../../../core/viewmodel";
+import { type RoomDragData } from "../dragAndDrop";
 
 export interface RoomListItemWrapperProps extends RoomListItemViewProps {
     /** Index of this room in the list */
@@ -41,10 +42,27 @@ export const RoomListItemWrapper = memo(function RoomListItemWrapper({
         return <RoomListItemView {...rest} {...getItemAccessibleProps("listbox", roomIndex, roomCount)} />;
     }
 
+    const isFirstInSection = roomIndexInSection === 0;
     return (
         <div {...getItemAccessibleProps("treegrid", roomIndex, roomIndexInSection)}>
             <div role="gridcell" aria-selected={rest.isSelected}>
-                <DraggableWrapper {...rest} />
+                <DraggableWrapper
+                    {...rest}
+                    onKeyDown={(e) => {
+                        if (e.code === "ArrowLeft" && isFirstInSection) {
+                            // Move focus to the section header
+                            e.preventDefault();
+                            e.stopPropagation();
+                            e.currentTarget.dispatchEvent(
+                                new KeyboardEvent("keydown", {
+                                    code: "ArrowUp",
+                                    key: "ArrowUp",
+                                    bubbles: true,
+                                }),
+                            );
+                        }
+                    }}
+                />
             </div>
         </div>
     );
@@ -59,12 +77,16 @@ function DraggableWrapper(props: RoomListItemViewProps): JSX.Element {
         ref: draggableRef,
         handleRef,
         isDragSource,
-    } = useDraggable({
+    } = useDraggable<RoomDragData>({
         id: item.id,
+        data: { type: "room", isDm: item.isDm },
         // We clone the item in the dnd overlay to avoid putting a hole in the list
         plugins: [Feedback.configure({ feedback: "clone" })],
         modifiers: [RestrictToVerticalAxis],
+        disabled: !item.canChangeSection,
     });
     const dndRef = useMergeRefs([draggableRef, handleRef]);
-    return <RoomListItemView {...props} ref={dndRef} isDragSource={isDragSource} />;
+    // Only wire up the draggable refs when the room can be dragged, otherwise dndkit puts incorrect
+    // and misleading a11y attributes on the item (aria-disabled=true and aria-draggable=false)
+    return <RoomListItemView {...props} ref={item.canChangeSection ? dndRef : undefined} isDragSource={isDragSource} />;
 }

@@ -12,45 +12,48 @@ import { Room, RoomMember, MatrixEvent, User } from "matrix-js-sdk/src/matrix";
 import { Checkbox, Button } from "@vector-im/compound-web";
 import LinkIcon from "@vector-im/compound-design-tokens/assets/web/icons/link";
 import CheckIcon from "@vector-im/compound-design-tokens/assets/web/icons/check";
+import { copyPlainTextToClipboard } from "@element-hq/element-web-shared-utils";
 
 import { _t } from "../../../languageHandler";
 import QRCode from "../elements/QRCode";
 import { RoomPermalinkCreator, makeUserPermalink } from "../../../utils/permalinks/Permalinks";
-import { copyPlaintext } from "../../../utils/strings";
 import { UIFeature } from "../../../settings/UIFeature";
 import BaseDialog from "./BaseDialog";
 import { type XOR } from "../../../@types/common";
 import { useSettingValue } from "../../../hooks/useSettings.ts";
+import FacebookIcon from "../../../../res/img/social/facebook.png";
+import TwitterIcon from "../../../../res/img/social/twitter-2.png";
+import LinkedInIcon from "../../../../res/img/social/linkedin.png";
+import RedditIcon from "../../../../res/img/social/reddit.png";
+import EmailIcon from "../../../../res/img/social/email-1.png";
 
-/* eslint-disable @typescript-eslint/no-require-imports */
 const SOCIALS = [
     {
         name: "Facebook",
-        img: require("../../../../res/img/social/facebook.png"),
+        img: FacebookIcon,
         url: (url: string) => `https://www.facebook.com/sharer/sharer.php?u=${url}`,
     },
     {
         name: "Twitter",
-        img: require("../../../../res/img/social/twitter-2.png"),
+        img: TwitterIcon,
         url: (url: string) => `https://twitter.com/home?status=${url}`,
     },
     {
         name: "LinkedIn",
-        img: require("../../../../res/img/social/linkedin.png"),
+        img: LinkedInIcon,
         url: (url: string) => `https://www.linkedin.com/shareArticle?mini=true&url=${url}`,
     },
     {
         name: "Reddit",
-        img: require("../../../../res/img/social/reddit.png"),
+        img: RedditIcon,
         url: (url: string) => `https://www.reddit.com/submit?url=${url}`,
     },
     {
         name: "email",
-        img: require("../../../../res/img/social/email-1.png"),
+        img: EmailIcon,
         url: (url: string) => `mailto:?body=${url}`,
     },
 ];
-/* eslint-enable @typescript-eslint/no-require-imports */
 
 interface BaseProps {
     /**
@@ -136,7 +139,7 @@ export function ShareDialog({ target, customTitle, onFinished, permalinkCreator 
                     Icon={isCopied ? CheckIcon : LinkIcon}
                     onClick={async () => {
                         clearTimeout(timeoutIdRef.current);
-                        await copyPlaintext(url);
+                        await copyPlainTextToClipboard(url);
                         setIsCopied(true);
                         timeoutIdRef.current = setTimeout(() => setIsCopied(false), 2000);
                     }}

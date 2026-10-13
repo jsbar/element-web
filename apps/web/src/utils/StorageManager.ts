@@ -22,23 +22,72 @@ function log(msg: string): void {
     logger.log(`StorageManager: ${msg}`);
 }
 
+function warn(msg: string, ...args: any[]): void {
+    logger.warn(`StorageManager: ${msg}`, ...args);
+}
+
 function error(msg: string, ...args: any[]): void {
     logger.error(`StorageManager: ${msg}`, ...args);
 }
 
-export function tryPersistStorage(): void {
-    if (navigator.storage && navigator.storage.persist) {
-        navigator.storage.persist().then((persistent) => {
-            logger.log("StorageManager: Persistent?", persistent);
-        });
-    } else if (document.requestStorageAccess) {
-        // Safari
-        document.requestStorageAccess().then(
-            () => logger.log("StorageManager: Persistent?", true),
-            () => logger.log("StorageManager: Persistent?", false),
-        );
-    } else {
-        logger.log("StorageManager: Persistence unsupported");
+/**
+ * Warn (in the logs, captured by rageshakes) that the browser refused to make our storage
+ * persistent. Without durable storage the browser may evict IndexedDB — which holds the
+ * end-to-end encryption crypto store — under storage pressure, forcing a re-login and
+ * recovery-key re-entry. See https://github.com/element-hq/element-web/issues/32198.
+ *
+ * We deliberately do NOT surface a user-facing dialog/toast here: on a packaged desktop
+ * (custom-scheme) build Chromium's durable-storage heuristic commonly returns `false` even
+ * in the healthy case, so a per-login warning would be a false-alarm flood. The actual
+ * post-eviction user prompt is handled separately by {@link checkConsistency} →
+ * StorageEvictedDialog.
+ */
+function warnPersistenceDenied(): void {
+    warn(
+        "Persistent storage was not granted. The browser may evict locally stored data " +
+            "(including the end-to-end encryption keys in the crypto store) under storage pressure, " +
+            "which can force a re-login. See https://github.com/element-hq/element-web/issues/32198.",
+    );
+}
+
+/**
+ * Ask the browser to make our storage persistent (durable), so it is not evicted under
+ * storage pressure. Acts on the result: warns when persistence is denied.
+ *
+ * Invoked on every login *and* session restore, so we first check whether storage is
+ * already persistent and short-circuit to avoid re-requesting (some browsers re-prompt).
+ *
+ * Never rejects, so it is safe to call fire-and-forget.
+ *
+ * @returns whether storage is persistent after the attempt.
+ */
+export async function tryPersistStorage(): Promise<boolean> {
+    try {
+        if (navigator.storage && navigator.storage.persist) {
+            // Avoid re-requesting (and possibly re-prompting) when we already have it. A failure
+            // to *query* the state must not stop us from *requesting* persistence below.
+            try {
+                if (navigator.storage.persisted && (await navigator.storage.persisted())) {
+                    log("Persistent storage already granted");
+                    return true;
+                }
+            } catch (e) {
+                warn("Could not query persisted-storage state; requesting persistence anyway", e);
+            }
+            const persistent = await navigator.storage.persist();
+            log(`Persistent? ${persistent}`);
+            if (!persistent) {
+                warnPersistenceDenied();
+            }
+            return persistent;
+        } else {
+            log("Persistence unsupported");
+            return false;
+        }
+    } catch (e) {
+        // A storage-API hiccup must never reject into the fire-and-forget caller.
+        error("Failed to request persistent storage", e);
+        return false;
     }
 }
 
@@ -130,34 +179,42 @@ async function checkSyncStore(): Promise<StoreCheck> {
 }
 
 async function checkCryptoStore(): Promise<StoreCheck> {
-    // check first if there is a rust crypto store
     try {
         const rustDbExists = await IndexedDBCryptoStore.exists(getIDBFactory()!, RUST_CRYPTO_STORE_NAME);
         log(`Rust Crypto store using IndexedDB contains data? ${rustDbExists}`);
 
-        if (rustDbExists) {
-            // There was an existing rust database, so consider it healthy.
-            return { exists: true, healthy: true };
-        } else {
-            // No rust store, so let's check if there is a legacy store not yet migrated.
-            try {
-                const legacyIdbExists = await IndexedDBCryptoStore.existsAndIsNotMigrated(
-                    getIDBFactory()!,
-                    LEGACY_CRYPTO_STORE_NAME,
-                );
-                log(`Legacy Crypto store using IndexedDB contains non migrated data? ${legacyIdbExists}`);
-                return { exists: legacyIdbExists, healthy: true };
-            } catch (e) {
-                error("Legacy crypto store using IndexedDB inaccessible", e);
-            }
-
-            // No need to check local storage or memory as rust stack doesn't support them.
-            // Given that rust stack requires indexeddb, set healthy to false.
-            return { exists: false, healthy: false };
-        }
+        // No need to check local storage or memory as the rust stack doesn't support them.
+        // A missing store is not in itself unhealthy: that is the normal state before the first
+        // login. `checkConsistency` separately flags the case where we expected data to be there.
+        return { exists: rustDbExists, healthy: true };
     } catch (e) {
         error("Rust crypto store using IndexedDB inaccessible", e);
         return { exists: false, healthy: false };
+    }
+}
+
+/**
+ * Check whether this session was created by a version of the application which used the legacy
+ * (libolm) crypto stack, and was never migrated to the Rust crypto stack.
+ *
+ * The rust store is checked first, because a session which *was* migrated successfully still has
+ * the legacy database sitting on disk alongside the rust one.
+ *
+ * @returns true if there is a legacy crypto store and no rust crypto store.
+ */
+export async function hasUnmigratedLegacyCryptoStore(): Promise<boolean> {
+    const idb = getIDBFactory();
+    if (!idb) return false;
+
+    try {
+        if (await IndexedDBCryptoStore.exists(idb, RUST_CRYPTO_STORE_NAME)) return false;
+
+        const legacyDbExists = await IndexedDBCryptoStore.exists(idb, LEGACY_CRYPTO_STORE_NAME);
+        log(`Legacy crypto store using IndexedDB contains data? ${legacyDbExists}`);
+        return legacyDbExists;
+    } catch (e) {
+        error("Crypto stores using IndexedDB inaccessible", e);
+        return false;
     }
 }
 

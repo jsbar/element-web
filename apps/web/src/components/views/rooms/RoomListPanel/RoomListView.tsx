@@ -5,33 +5,45 @@
  * Please see LICENSE files in the repository root for full details.
  */
 
-import React, { useCallback, type JSX, type ReactNode } from "react";
+import React, { useCallback, type JSX, type ReactNode, useContext } from "react";
 import {
     RoomListView as SharedRoomListView,
     useCreateAutoDisposedViewModel,
     type Room as SharedRoom,
 } from "@element-hq/web-shared-components";
-import { type Room } from "matrix-js-sdk/src/matrix";
+import { Room } from "matrix-js-sdk/src/matrix";
 
-import { useMatrixClientContext } from "../../../../contexts/MatrixClientContext";
-import { RoomAvatarView } from "../../avatars/RoomAvatarView";
+import { DecoratedRoomAvatarView } from "../../avatars/DecoratedRoomAvatarView";
+import RoomAvatar from "../../avatars/RoomAvatar";
+import { PreviewRoomAvatarData } from "../../../../viewmodels/room-list/PreviewRoomAvatarData";
 import { getKeyBindingsManager } from "../../../../KeyBindingsManager";
 import { KeyBindingAction } from "../../../../accessibility/KeyboardShortcuts";
 import { Landmark, LandmarkNavigation } from "../../../../accessibility/LandmarkNavigation";
 import { RoomListViewModel } from "../../../../viewmodels/room-list/RoomListViewModel";
+import { SDKContext } from "../../../../contexts/SDKContext.ts";
 
 /**
  * RoomListView component using shared components with proper MVVM pattern.
  */
 export function RoomListView(): JSX.Element {
-    const matrixClient = useMatrixClientContext();
+    const sdkContext = useContext(SDKContext);
 
     // Create and auto-dispose ViewModel instance
-    const vm = useCreateAutoDisposedViewModel(() => new RoomListViewModel({ client: matrixClient }));
+    const vm = useCreateAutoDisposedViewModel(
+        () =>
+            new RoomListViewModel({
+                client: sdkContext.client!,
+                roomViewStore: sdkContext.roomViewStore,
+                spaceStore: sdkContext.spaceStore,
+            }),
+    );
 
     // Render avatar for each room - memoized to prevent re-renders
     const renderAvatar = useCallback((room: SharedRoom): ReactNode => {
-        return <RoomAvatarView room={room as Room} />;
+        if (room instanceof Room) return <DecoratedRoomAvatarView room={room} />;
+        // A preview item has no `Room`, only the data needed for its avatar
+        if (room instanceof PreviewRoomAvatarData) return <RoomAvatar size="32px" oobData={room} />;
+        return null;
     }, []);
 
     // Handle keyboard navigation for landmarks

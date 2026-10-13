@@ -20,7 +20,7 @@ export async function doTokenRegistration(
     await page.goto("/#/login");
 
     await page.getByRole("button", { name: "Edit" }).click();
-    await page.getByRole("textbox", { name: "Other homeserver" }).fill(homeserver.baseUrl);
+    await page.getByRole("textbox", { name: "Other account provider" }).fill(homeserver.baseUrl);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     // wait for the dialog to go away
     await expect(page.locator(".mx_ServerPickerDialog")).toHaveCount(0);
@@ -52,13 +52,13 @@ export async function doTokenRegistration(
 
     return page.evaluate(() => ({
         homeserverBaseUrl: window.mxMatrixClientPeg.get().getHomeserverUrl(),
-        accessToken: window.mxMatrixClientPeg.get().getAccessToken(),
-        userId: window.mxMatrixClientPeg.get().getUserId(),
-        deviceId: window.mxMatrixClientPeg.get().getDeviceId(),
+        accessToken: window.mxMatrixClientPeg.get().getAccessToken()!,
+        userId: window.mxMatrixClientPeg.get().getSafeUserId(),
+        deviceId: window.mxMatrixClientPeg.get().getDeviceId()!,
         homeServer: window.mxMatrixClientPeg.get().getHomeserverUrl(),
         password: null,
         displayName: "Alice",
-        username: window.mxMatrixClientPeg.get().getUserIdLocalpart(),
+        username: window.mxMatrixClientPeg.get().getUserIdLocalpart()!,
     }));
 }
 

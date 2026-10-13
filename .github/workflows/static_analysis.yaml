@@ -25,10 +25,10 @@ jobs:
                     - name: Typescript Syntax Check
                       install: layered
                       command: "lint:types"
-                    - name: Prettier
+                    - name: Oxfmt
                       install: normal
-                      command: "lint:prettier"
-                    - name: ESLint
+                      command: "lint:fmt"
+                    - name: Oxlint
                       install: normal
                       command: "lint:js"
                     - name: Style Lint
@@ -43,22 +43,29 @@ jobs:
                     - name: Rethemendex Check
                       command: "rethemendex"
                       assert-diff: true
+                    - name: Module API Docs Check
+                      command: "build"
+                      install: normal
+                      project: "@element-hq/element-web-module-api"
+                      assert-diff: true
                     - name: Docs
                       install: layered
                       command: "docs:build"
+                    - name: Unused settings
+                      install: normal
+                      command: "lint:unused-settings"
         name: ${{ matrix.name }}
-        runs-on: ubuntu-24.04
+        runs-on: ubuntu-26.04
         steps:
-            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
               with:
                   persist-credentials: false
 
-            - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
-            - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-              if: matrix.install != ''
+            - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
               with:
-                  cache: "pnpm"
-                  node-version: "lts/*"
+                  # Nothing to cache for the jobs that do not install
+                  cache: ${{ matrix.install != '' }}
+                  install: false
 
             - name: Install Dependencies (layered)
               if: matrix.install == 'layered'
@@ -68,9 +75,18 @@ jobs:
               run: "pnpm install --frozen-lockfile"
 
             - name: Run ${{ matrix.command }}
-              run: pnpm --if-present run "$CMD" && pnpm -r --if-present run "$CMD"
+              run: pnpm nx run-many -t "$CMD" -p
               env:
                   CMD: ${{ matrix.command }}
+              if: matrix.project == ''
+
+            - name: Run ${{ matrix.command }} on ${{ matrix.project }}
+              run: pnpm nx run -t "$CMD" -p "$PROJECT"
+              env:
+                  CMD: ${{ matrix.command }}
+                  PROJECT: ${{ matrix.project }}
+
+              if: matrix.project
 
             - name: Assert no changes
               run: git diff --exit-code
@@ -78,16 +94,16 @@ jobs:
 
     zizmor:
         name: Zizmor Github Actions lint
-        runs-on: ubuntu-24.04
+        runs-on: ubuntu-26.04
         permissions:
             security-events: write
         steps:
-            - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
               with:
                   persist-credentials: false
 
             - name: Run zizmor
-              uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+              uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
 
     i18n:
         strategy:
@@ -99,7 +115,8 @@ jobs:
                       allowed-hardcoded-keys: |
                           console_dev_note
                           labs|element_call_video_rooms
-                          labs|feature_disable_call_per_sender_encryption
+                          labs|feature_matrixrtc_slots
+                          labs|feature_matrixrtc_slots_description
                           voip|element_call
                           error|invalid_json
                           error|misconfigured
@@ -108,10 +125,14 @@ jobs:
                           labs|sliding_sync_description
                           settings|voip|noise_suppression_description
                           settings|voip|echo_cancellation_description
+                          labs|feature_element_call_react
+                          devtools|settings|elementCallMockComponent
                     - name: Element Desktop
                       path: "apps/desktop"
                     - name: Shared Components
                       path: "packages/shared-components"
+                      allowed-hardcoded-keys: |
+                          voip|element_call_mock|title
         name: "i18n Check (${{ matrix.name }})"
         uses: matrix-org/matrix-web-i18n/.github/workflows/i18n_check.yml@6eda3835118f3bc3fb658a1a3c20b7da9d16ae42
         permissions:
@@ -127,7 +148,7 @@ jobs:
         name: Static Analysis
         needs: [lint, i18n, zizmor]
         if: always()
-        runs-on: ubuntu-24.04
+        runs-on: ubuntu-26.04
         steps:
             - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
               run: exit 1

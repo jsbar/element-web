@@ -1,8 +1,14 @@
-# syntax=docker.io/docker/dockerfile:1.24-labs@sha256:7d49dad25a050e14338ba7028b0460243f9d911dedc160a8fe20c34738fef3af
+# syntax=docker.io/docker/dockerfile:1.28-labs@sha256:ad43eec41369d9ef94412c0d1eb3203d12218d01da225afc92a3aeba3a0e7796
 # Context must be the root of the monorepo
 
+# PNPM source
+FROM --platform=$BUILDPLATFORM ghcr.io/pnpm/pnpm:12.12.1@sha256:150c9372f3a6d02039f11dc7d1f6070896567038968c97bbb224e3b03ee3cbcc AS pnpm
+
 # Builder
-FROM --platform=$BUILDPLATFORM node:24-bullseye@sha256:87ba72ac15b59ca7dc49c63c7ad6253b7bc15ab28fa22351f7e402f64e0c8ea9 AS builder
+FROM --platform=$BUILDPLATFORM node:24-bullseye@sha256:25f3016fcdae6b5d65bd9bcb4064b7e4198ec8d49493fa40d73f9b463d04fb15 AS builder
+
+COPY --from=pnpm /opt/pnpm /opt/pnpm
+RUN ln -s /opt/pnpm/pnpm /usr/local/bin/pnpm
 
 # Support custom branch of the js-sdk. This also helps us build images of element-web develop.
 ARG USE_CUSTOM_SDKS=false
@@ -13,7 +19,6 @@ WORKDIR /src
 
 # Install dependencies
 COPY --parents package.json pnpm-lock.yaml pnpm-workspace.yaml patches scripts **/package.json /src/
-RUN corepack enable
 RUN pnpm install --frozen-lockfile
 RUN --mount=type=bind,source=.git,target=/src/.git /src/scripts/docker-link-repos.sh
 
@@ -25,7 +30,7 @@ RUN --mount=type=bind,source=.git,target=/src/.git /src/scripts/docker-package.s
 RUN cp /src/apps/web/config.sample.json /src/apps/web/webapp/config.json
 
 # App
-FROM nginxinc/nginx-unprivileged:alpine-slim@sha256:17986f2763649d8c654ff581e596bb14f8339c158e12855f8dcd41978f78edac
+FROM nginxinc/nginx-unprivileged:alpine-slim@sha256:1517d8c358e2e093957ebee087afa9eb19a32f5d7ecb711b7429e369cb998224 AS element_web
 
 # Need root user to install packages & manipulate the usr directory
 USER root
@@ -50,3 +55,39 @@ USER nginx
 ENV ELEMENT_WEB_PORT=80
 
 HEALTHCHECK --start-period=5s CMD wget -q --spider http://localhost:$ELEMENT_WEB_PORT/config.json
+
+# Modules are consumed as prebuilt release artifacts rather than built from source.
+# Each module is pinned to a version and the sha256 of its release archive.
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS modules
+
+ARG MODULE_BANNER_VERSION=v2.1.1
+ADD --checksum=sha256:bd894fa30df4faa4fd7aab450f8d15c2f1b8246b3073b51932e5fa35821973da \
+    https://github.com/element-hq/element-web/releases/download/module%2Fbanner%2F${MODULE_BANNER_VERSION}/banner-${MODULE_BANNER_VERSION}.zip \
+    /tmp/modules/banner-${MODULE_BANNER_VERSION}.zip
+
+ARG MODULE_RESTRICTED_GUESTS_VERSION=v1.1.0
+ADD --checksum=sha256:7669d230bc4a72a9cc76e85c66b88b9b7d209c732484116fbcfd111fa49ce512 \
+    https://github.com/element-hq/element-web/releases/download/module%2Frestricted-guests%2F${MODULE_RESTRICTED_GUESTS_VERSION}/restricted-guests-${MODULE_RESTRICTED_GUESTS_VERSION}.zip \
+    /tmp/modules/restricted-guests-${MODULE_RESTRICTED_GUESTS_VERSION}.zip
+
+ARG MODULE_WIDGET_LIFECYCLE_VERSION=v1.1.0
+ADD --checksum=sha256:2363fdd6bd67e08ac4ca777d11c942559409482c41021e39ff51d5567cc7b76f \
+    https://github.com/element-hq/element-web/releases/download/module%2Fwidget-lifecycle%2F${MODULE_WIDGET_LIFECYCLE_VERSION}/widget-lifecycle-${MODULE_WIDGET_LIFECYCLE_VERSION}.zip \
+    /tmp/modules/widget-lifecycle-${MODULE_WIDGET_LIFECYCLE_VERSION}.zip
+
+ARG MODULE_WIDGET_TOGGLES_VERSION=v1.1.0
+ADD --checksum=sha256:04155cf6885f41643fdecd61559de326d14d5ddf9143ee02041ba1216cbf263d \
+    https://github.com/element-hq/element-web/releases/download/module%2Fwidget-toggles%2F${MODULE_WIDGET_TOGGLES_VERSION}/widget-toggles-${MODULE_WIDGET_TOGGLES_VERSION}.zip \
+    /tmp/modules/widget-toggles-${MODULE_WIDGET_TOGGLES_VERSION}.zip
+
+# Unpack the modules
+RUN apk add --no-cache unzip && \
+    for archive in /tmp/modules/*.zip; do \
+        name=$(basename "$archive" .zip); \
+        mkdir -p "/modules/$name" && unzip -q "$archive" -d "/modules/$name"; \
+    done
+
+# Target with element_web + `/modules` copied in
+FROM element_web AS element_web_modules
+
+COPY --from=modules /modules /modules

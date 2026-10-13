@@ -11,27 +11,35 @@ import {
     ClientRendezvousFailureReason,
     linkNewDeviceByGeneratingQR,
     MSC4108FailureReason,
-    MSC4108SignInWithQR,
     RendezvousError,
     type RendezvousFailureReason,
     RendezvousIntent,
     signInByGeneratingQR,
+    type SignInWithQRFlow,
+    type SignInWithQRSecrets,
 } from "matrix-js-sdk/src/rendezvous";
 import { logger } from "matrix-js-sdk/src/logger";
-import { AutoDiscovery, MatrixClient, OAuthGrantType, type OidcClientConfig, type XOR } from "matrix-js-sdk/src/matrix";
+import {
+    AutoDiscovery,
+    MatrixClient,
+    OAuthGrantType,
+    type ValidatedAuthMetadata,
+    type XOR,
+} from "matrix-js-sdk/src/matrix";
 import { sleep } from "matrix-js-sdk/src/utils";
 import { secureRandomString } from "matrix-js-sdk/src/randomstring";
 
 import { Click, Mode, Phase } from "./LoginWithQR-types";
 import LoginWithQRFlow from "./LoginWithQRFlow";
-import { type CompleteOidcLoginResponse } from "../../../utils/oidc/authorize";
-import { getOidcClientId } from "../../../utils/oidc/registerClient.ts";
+import { type CompleteOAuthLoginResponse } from "../../../utils/oauth/authorize";
+import { getOAuthClientId } from "../../../utils/oauth/registerClient.ts";
 import SdkConfig from "../../../SdkConfig.ts";
+import { type Context } from "../../../utils/oauth/persistOAuthSettings.ts";
 
-export type QrLoginCredentials = Omit<CompleteOidcLoginResponse, "idTokenClaims"> &
-    Awaited<ReturnType<MSC4108SignInWithQR["shareSecrets"]>> & {
-        deviceId: string;
-    };
+export type QrLoginCredentials = CompleteOAuthLoginResponse & {
+    secrets?: SignInWithQRSecrets;
+    deviceId: string;
+};
 
 type BaseProps = {
     /**
@@ -81,9 +89,9 @@ interface IState {
      */
     phase: Phase;
     /**
-     * The rendezvous channel in use
+     * The Sign in with QR flow to use
      */
-    rendezvous?: MSC4108SignInWithQR;
+    flow?: SignInWithQRFlow;
     /**
      * TODO
      */
@@ -101,26 +109,10 @@ interface IState {
      */
     failureReason?: FailureReason;
     /**
-     * TODO
+     * Details of the server we are logging into, set after initial protocol negotiation.
      */
-    loginServerDetails?: {
-        /**
-         * TODO
-         */
-        homeserverUrl: string;
-        /**
-         * TODO
-         */
-        identityServerUrl?: string;
-        /**
-         * TODO
-         */
-        metadata: OidcClientConfig;
-        /**
-         * TODO
-         */
-        clientId: string;
-    };
+    loginServerDetails?: Pick<Context, "homeserverUrl" | "identityServerUrl" | "metadata"> &
+        Pick<Context["authContext"], "clientId">;
 }
 
 export enum LoginWithQRFailureReason {
@@ -141,7 +133,7 @@ export type FailureReason = RendezvousFailureReason | LoginWithQRFailureReason;
  */
 async function resolveServerURLs(
     serverNameOrBaseUrl: string,
-): Promise<Pick<Partial<NonNullable<IState["loginServerDetails"]>>, "homeserverUrl" | "identityServerUrl">> {
+): Promise<Pick<Partial<Context>, "homeserverUrl" | "identityServerUrl">> {
     if (serverNameOrBaseUrl.startsWith("http://") || serverNameOrBaseUrl.startsWith("https://")) {
         // treat as base URL and skip discovery
         return {
@@ -167,7 +159,8 @@ async function resolveServerURLs(
  * It implements `login.reciprocate` & `login.start` capabilities and showing QR codes.
  * It does not implement any flows requiring the scanning of QR codes.
  *
- * Implements the v2024 version of MSC4108: https://github.com/matrix-org/matrix-spec-proposals/pull/4108
+ * Supports the v2024 and v2025 versions of MSC4108: https://github.com/matrix-org/matrix-spec-proposals/pull/4108
+ * The version in use is chosen by matrix-js-sdk.
  */
 export default class LoginWithQR extends React.Component<Props, IState> {
     private finished = false;
@@ -199,7 +192,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
     private async updateMode(mode: Mode, showLoading = true): Promise<void> {
         this.abortController?.abort();
         this.abortController = new AbortController();
-        this.setState({ rendezvous: undefined });
+        this.setState({ flow: undefined });
         if (showLoading) {
             this.setState({ phase: Phase.Loading });
         }
@@ -224,16 +217,16 @@ export default class LoginWithQR extends React.Component<Props, IState> {
     }
 
     private generateAndShowCode = async (abortController: AbortController): Promise<void> => {
-        let rendezvous: MSC4108SignInWithQR;
+        let flow: SignInWithQRFlow;
         try {
-            rendezvous =
+            flow =
                 this.props.intent === RendezvousIntent.LOGIN_ON_NEW_DEVICE
                     ? await signInByGeneratingQR(this.props.client, this.onFailure, abortController.signal)
                     : await linkNewDeviceByGeneratingQR(this.props.client, this.onFailure, abortController.signal);
             if (abortController.signal.aborted) return;
             this.setState({
                 phase: Phase.ShowingQR,
-                rendezvous,
+                flow: flow,
                 failureReason: undefined,
             });
         } catch (e) {
@@ -246,15 +239,24 @@ export default class LoginWithQR extends React.Component<Props, IState> {
         try {
             if (this.props.intent === RendezvousIntent.RECIPROCATE_LOGIN_ON_EXISTING_DEVICE) {
                 // MSC4108-Flow: NewScanned
-                await rendezvous.negotiateProtocols();
-                const { verificationUri } = await rendezvous.deviceAuthorizationGrant();
+                await flow.negotiateProtocols();
+                const { verificationUri } = await flow.deviceAuthorizationGrant();
                 this.setState({
                     phase: Phase.OutOfBandConfirmation,
                     verificationUri,
                 });
             } else {
-                const { serverName } = await rendezvous.negotiateProtocols();
-                const { homeserverUrl, identityServerUrl } = await resolveServerURLs(serverName!);
+                // The v2024 flow gives us a server name to resolve, the v2025 flow gives us the base URL directly
+                const { serverName, baseUrl } = await flow.negotiateProtocols();
+                const serverNameOrBaseUrl = baseUrl ?? serverName;
+
+                if (!serverNameOrBaseUrl) {
+                    this.setState({ phase: Phase.Error, failureReason: ClientRendezvousFailureReason.Unknown });
+                    logger.error("Failed to discover homeserver URL");
+                    throw new Error("Failed to discover homeserver URL");
+                }
+
+                const { homeserverUrl, identityServerUrl } = await resolveServerURLs(serverNameOrBaseUrl);
 
                 if (!homeserverUrl) {
                     this.setState({ phase: Phase.Error, failureReason: ClientRendezvousFailureReason.Unknown });
@@ -262,7 +264,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
                     throw new Error("Failed to discover homeserver URL");
                 }
 
-                let metadata: OidcClientConfig;
+                let metadata: ValidatedAuthMetadata;
                 let clientId: string;
                 try {
                     // Create a new client as the homeserver URL may not be the same as we used for the secure channel
@@ -270,7 +272,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
                     if (!metadata.grant_types_supported.includes(OAuthGrantType.DeviceAuthorization)) {
                         throw new Error("Server does not support Device Authorization Grant");
                     }
-                    clientId = await getOidcClientId(metadata, SdkConfig.get().oidc_static_clients);
+                    clientId = await getOAuthClientId(metadata, SdkConfig.get().oidc_static_clients);
                 } catch (e) {
                     this.setState({
                         phase: Phase.Error,
@@ -295,19 +297,17 @@ export default class LoginWithQR extends React.Component<Props, IState> {
         } catch (e: RendezvousError | unknown) {
             if (abortController.signal.aborted) return;
             logger.error("Error whilst approving login", e);
-            await rendezvous.cancel(
-                e instanceof RendezvousError ? (e.code as MSC4108FailureReason) : ClientRendezvousFailureReason.Unknown,
-            );
+            await flow.cancel(e instanceof RendezvousError ? e.code : ClientRendezvousFailureReason.Unknown);
         }
     };
 
     private approveLogin = async (checkCode: string | undefined): Promise<void> => {
-        if (!(this.state.rendezvous instanceof MSC4108SignInWithQR)) {
+        if (!this.state.flow) {
             this.setState({ phase: Phase.Error, failureReason: ClientRendezvousFailureReason.Unknown });
             throw new Error("Rendezvous not found");
         }
 
-        if (this.state.rendezvous?.checkCode !== checkCode) {
+        if (this.state.flow?.checkCode !== checkCode) {
             this.setState({ failureReason: LoginWithQRFailureReason.CheckCodeMismatch });
             return;
         }
@@ -324,7 +324,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
                 this.setState({ phase: Phase.WaitingForDevice });
 
                 // send secrets
-                await this.state.rendezvous.shareSecrets();
+                await this.state.flow.shareSecrets();
 
                 // done
                 this.onFinished(true);
@@ -338,25 +338,23 @@ export default class LoginWithQR extends React.Component<Props, IState> {
 
                 // Generate our new device ID
                 const deviceId = secureRandomString(10);
-                const { userCode } = await this.state.rendezvous.deviceAuthorizationGrant({
+                const { userCode } = await this.state.flow.deviceAuthorizationGrant({
                     metadata,
                     clientId,
                     deviceId,
                 });
                 this.setState({ phase: Phase.WaitingForDevice, userCode });
 
-                const tokenResponse = await this.state.rendezvous.completeLoginOnNewDevice({ clientId });
+                const tokenResponse = await this.state.flow.completeLoginOnNewDevice({ clientId });
 
                 if (tokenResponse) {
-                    const { secrets } = await this.state.rendezvous.shareSecrets();
+                    const { secrets } = await this.state.flow.shareSecrets();
 
                     await this.props.onLoggedIn({
                         accessToken: tokenResponse.access_token,
                         refreshToken: tokenResponse.refresh_token,
                         homeserverUrl,
                         clientId,
-                        idToken: tokenResponse.id_token,
-                        issuer: metadata!.issuer,
                         identityServerUrl,
                         secrets,
                         deviceId,
@@ -396,7 +394,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
     public reset(): void {
         this.abortController?.abort();
         this.setState({
-            rendezvous: undefined,
+            flow: undefined,
             verificationUri: undefined,
             failureReason: undefined,
             userCode: undefined,
@@ -406,7 +404,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
     private onClick = async (type: Click, checkCode?: string): Promise<void> => {
         switch (type) {
             case Click.Cancel:
-                await this.state.rendezvous?.cancel(MSC4108FailureReason.UserCancelled);
+                await this.state.flow?.cancel(MSC4108FailureReason.UserCancelled);
                 this.onFinished(false);
                 break;
             case Click.Approve:
@@ -414,9 +412,9 @@ export default class LoginWithQR extends React.Component<Props, IState> {
                 break;
             case Click.Decline:
                 if (this.props.intent === RendezvousIntent.LOGIN_ON_NEW_DEVICE) {
-                    await this.state.rendezvous?.cancel(MSC4108FailureReason.UserCancelled);
+                    await this.state.flow?.cancel(MSC4108FailureReason.UserCancelled);
                 } else {
-                    await this.state.rendezvous?.declineLoginOnExistingDevice();
+                    await this.state.flow?.declineLoginOnExistingDevice();
                 }
                 this.onFinished(false);
                 break;
@@ -431,7 +429,7 @@ export default class LoginWithQR extends React.Component<Props, IState> {
             <LoginWithQRFlow
                 onClick={this.onClick}
                 phase={this.state.phase}
-                code={this.state.phase === Phase.ShowingQR ? this.state.rendezvous?.code : undefined}
+                code={this.state.phase === Phase.ShowingQR ? this.state.flow?.code : undefined}
                 failureReason={this.state.failureReason}
                 userCode={this.state.userCode}
                 intent={this.props.intent}
